@@ -1,4 +1,4 @@
-// es5506.c - Full corrected implementation
+
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -159,7 +159,19 @@ static UINT8 device_start_es5506(const DEV_GEN_CFG* cfg, DEV_INFO* retDevInf) {
     es5506_set_mute_mask(chip, 0x00000000);
     chip->_devData.chipInf = chip;
     INIT_DEVINF(retDevInf, &chip->_devData, chip->output_rate, &devDef);
-    
+
+    // ----------- DUMMY ROM PATCH FOR VGM LOGGING -----------
+    // If no sample ROM was loaded, fill each region with a repeating saw pattern.
+    for (int r = 0; r < MAX_REGIONS; ++r) {
+        if (!chip->region_base[r]) {
+            chip->region_size[r] = 0x10000; // 64k words (128KB)
+            chip->region_base[r] = (UINT16*)calloc(chip->region_size[r], 1);
+            for (int i = 0; i < chip->region_size[r] / 2; ++i)
+                chip->region_base[r][i] = (i & 0xFF) << 8; // Sawtooth waveform
+        }
+    }
+    // -------------------------------------------------------
+
     return 0x00;
 }
 
