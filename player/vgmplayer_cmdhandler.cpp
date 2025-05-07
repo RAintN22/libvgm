@@ -70,7 +70,7 @@
 	{0xFF, 0x00, &VGMPlayer::Cmd_invalid},              // 2F
 	{0x00, 0x02, &VGMPlayer::Cmd_SN76489},              // 30 SN76489 register write (2nd chip)
 	{0xFF, 0x02, &VGMPlayer::Cmd_AY_Stereo},            // 31 AY8910 stereo mask [chip type depends on data]
-	{0x2B, 0x02, &VGMPlayer::Cmd_Ofs8_Data8},           // 32 MSM5205
+	{0x2B, 0x02, &VGMPlayer::Cmd_MSM5205_Reg},           // 32 MSM5205
 	{0xFF, 0x02, &VGMPlayer::Cmd_unknown},              // 33
 	{0xFF, 0x02, &VGMPlayer::Cmd_unknown},              // 34
 	{0xFF, 0x02, &VGMPlayer::Cmd_unknown},              // 35
@@ -1068,6 +1068,19 @@ void VGMPlayer::Cmd_Ofs8_Data8(void)
 		return;
 	
 	cDev->write8(cDev->base.defInf.dataPtr, fData[0x01] & 0x7F, fData[0x02]);
+	return;
+}
+
+void VGMPlayer::Cmd_MSM5205_Reg(void)
+{
+	UINT8 chipType = _CMD_INFO[fData[0x00]].chipType;
+	UINT8 chipID = (fData[0x01] & 0x80) >> 7;
+	CHIP_DEVICE* cDev = GetDevicePtr(chipType, chipID);
+	if (cDev == NULL || cDev->write8 == NULL)
+		return;
+	
+	cDev->write8(cDev->base.defInf.dataPtr, 1, fData[0x01] );
+	cDev->write8(cDev->base.defInf.dataPtr, 0, fData[0x01] );
 	return;
 }
 

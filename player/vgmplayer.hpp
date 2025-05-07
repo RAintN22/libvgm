@@ -256,6 +256,7 @@ protected:
 	void Cmd_CPort_Reg8_Data8(void);		// command 52/53/56..59/5E/5F - Port (in command byte), Register, Data (8-bit)
 	void Cmd_Port_Reg8_Data8(void);			// command D0..D2 - Port, Register, Data (8-bit)
 	void Cmd_Ofs8_Data8(void);				// command B3/B5..BB/BE/BF - Offset (8-bit), Data (8-bit)
+	void Cmd_MSM5205_Reg(void);				// command B3/B5..BB/BE/BF - Offset (8-bit), Data (8-bit)
 	void Cmd_Ofs16_Data8(void);				// command C5..C8/D3/D4/D6/E5 - Offset (16-bit), Data (8-bit)
 	void Cmd_Ofs8_Data16(void);				// unused - Offset (8-bit), Data (16-bit)
 	void Cmd_Ofs16_Data16(void);			// command E1 - Offset (16-bit), Data (16-bit)
@@ -274,6 +275,8 @@ protected:
 	void Cmd_SAA_Reg(void);					// command BD - SAA1099 register write (Reg8_Data8 with remapping)
 	void Cmd_OKIM6295_Reg(void);			// command B8 - OKIM6295 register write (Ofs8_Data8 with minor fixes)
 	void Cmd_AY_Stereo(void);				// command 30 - set AY8910 stereo mask
+	void Cmd_MSM5205(void);					// command 32 - MSM5205
+
 	
 	CPCONV* _cpcUTF16;	// UTF-16 LE -> UTF-8 codepage conversion
 	DEV_LOGGER _logger;
