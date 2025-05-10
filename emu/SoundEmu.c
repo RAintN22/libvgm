@@ -706,6 +706,8 @@ const char* SndEmu_GetDevName(UINT8 deviceID, UINT8 opts, const DEV_GEN_CFG* dev
 #endif
 #ifdef SNDDEV_MSM5205
 	case DEVID_MSM5205:
+		if (devCfg != NULL && devCfg->flags)
+			return "MSM6585";
 		return "MSM5205";
 #endif
 #ifdef SNDDEV_BSMT2000
