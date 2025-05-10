@@ -1,7 +1,62 @@
 // license:BSD-3-Clause
-// copyright-holders:eito, ValleyBell, Mao
+// copyright-holders:Aaron Giles
+/*
+ *   streaming ADPCM driver
+ *   by Aaron Giles
+ *
+ *   Library to transcode from an ADPCM source to raw PCM.
+ *   Written by Buffoni Mirko in 08/06/97
+ *   References: various sources and documents.
+ *
+ *   HJB 08/31/98
+ *   modified to use an automatically selected oversampling factor
+ *   for the current sample rate
+ *
+ *   01/06/99
+ *    separate MSM5205 emulator form adpcm.c and some fix
+ *
+ *   07/29/12
+ *    added basic support for the MSM6585
+ */
+/*
+
+    MSM 5205 ADPCM chip:
+
+    Data is streamed from a CPU by means of a clock generated on the chip.
+
+    Holding the rate selector lines (S1 and S2) both high places the MSM5205 in an undocumented
+    mode which disables the sampling clock generator and makes VCK an input line.
+
+    A reset signal is set high or low to determine whether playback (and interrupts) are occurring.
+
+  MSM6585: is an upgraded MSM5205 voice synth IC.
+   Improvements:
+    More precise internal DA converter
+    Built in low-pass filter
+    Expanded sampling frequency
+
+   Differences between MSM6585 & MSM5205:
+
+                              MSM6585                      MSM5205
+    Master clock frequency    640kHz                       384k/768kHz
+    Sampling frequency        4k/8k/16k/32kHz at 640kHz    4k/6k/8kHz at 384kHz
+    ADPCM bit length          4-bit                        3-bit/4-bit
+    Data capture timing       3µsec at 640kHz              15.6µsec at 384kHz
+    DA converter              12-bit                       10-bit
+    Low-pass filter           -40dB/oct                    N/A
+    Overflow prevent circuit  Included                     N/A
+    Cutoff Frequency          (Sampling Frequency/2.5)kHz  N/A
+
+    Data capture follows VCK falling edge on MSM5205 (VCK rising edge on MSM6585)
+
+   TODO:
+   - lowpass filter for MSM6585
+
+ */
+
 /**********************************************************************************************
-    OKI MSM5205 ADPCM (Full Working Implementation)
+    OKI MSM5205 ADPCM (Full Working Implementation for libvgm)
+// copyright-holders:eito, ValleyBell, Mao
 ***********************************************************************************************/
 
 #include <stdlib.h>
@@ -49,7 +104,9 @@ typedef struct _msm5205_state {
     
     UINT8   output_mask;
     UINT8   Muted;
-    
+
+    UINT8   is_msm6585; // 0 = MSM5205, 1 = MSM6585
+	
     DEVCB_SRATE_CHG SmpRateFunc;
     void*   SmpRateData;
 } msm5205_state;
@@ -69,7 +126,7 @@ static DEVDEF_RWFUNC devFunc[] = {
 };
 
 static DEV_DEF devDef = {
-    "MSM5205", "eito", FCC_EITO,
+    "MSM5205", "Mao/eito", FCC_EITO,
     device_start_msm5205,
     device_stop_msm5205,
     device_reset_msm5205,
@@ -142,7 +199,7 @@ static INT16 clock_adpcm(msm5205_state *chip, UINT8 data) {
 // ========== Device Interface ==========
 static UINT8 device_start_msm5205(const DEV_GEN_CFG *cfg, DEV_INFO *retDevInf) {
     msm5205_state *info;
-    
+
     compute_tables();
     
     info = (msm5205_state*)calloc(1, sizeof(msm5205_state));
@@ -155,6 +212,7 @@ static UINT8 device_start_msm5205(const DEV_GEN_CFG *cfg, DEV_INFO *retDevInf) {
     info->data_empty = 0xFF;
     info->data_in_last = PIN_S2;
     info->data_buf[0] = info->data_in_last;
+    info->is_msm6585 = (cfg->flags & 0x01); // new flag!
 
     info->_devData.chipInf = info;
     INIT_DEVINF(retDevInf, &info->_devData, msm5205_get_rate(info), &devDef);
