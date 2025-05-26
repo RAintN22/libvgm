@@ -98,6 +98,7 @@ struct _bsmt2000_state
     UINT8 adpcm;          // ADPCM enabled?
     UINT8 mode;           // current mode (0,1,5,6,7)
     UINT8 last_register;  // last register written
+    UINT8 right_volume_set;  // Track if right volume was set
     // ADPCM state
     INT32 adpcm_current;
     INT32 adpcm_delta_n;
@@ -253,8 +254,7 @@ static void device_stop_bsmt2000(void *info)
 }
 
 /* ==== Device Reset ==== */
-static void device_reset_bsmt2000(void *info)
-{
+static void device_reset_bsmt2000(void *info) {
     bsmt2000_state *chip = (bsmt2000_state *)info;
     UINT32 muteMask;
 
@@ -263,6 +263,7 @@ static void device_reset_bsmt2000(void *info)
     chip->adpcm_current = 0;
     chip->adpcm_delta_n = 10;
     chip->adpcm_77 = 0;
+    chip->right_volume_set = 0; // Reset volume flag
     // Reset mode to last_register?
     chip->mode = chip->last_register;
     bsmt2000_set_mute_mask(chip, muteMask);
@@ -300,33 +301,82 @@ static UINT8 bsmt2000_r(void *info, UINT8 offset)
 
 /* ==== Data/Voice Register Write ==== */
 
-static void bsmt2000_write_data(void *info, UINT8 address, UINT16 data)
-{
+static void bsmt2000_write_data(void *info, UINT8 address, UINT16 data) {
     bsmt2000_state *chip = (bsmt2000_state *)info;
     bsmt2000_voice *voice;
-    int voice_index = 0, regindex = 6;
+    int voice_index, regindex;
     UINT8 mode = chip->mode;
     chip->last_register = address;
 
-    if (address >= 0x80)
-        return;
+    if (address >= 0x80) return;
 
-    // Determine register index using regmap (see PinMAME)
-    while (address < regmap[mode][regindex])
-        --regindex;
+    // Handle PCM voices (address < 0x6d)
+    if (address < 0x6d) {
+        regindex = 6;
+        while (address < regmap[mode][regindex])
+            regindex--;
 
-    voice_index = address - regmap[mode][regindex];
-    if (voice_index >= chip->voices)
-        return;
-    voice = &chip->voice[voice_index];
-    // Only support standard 7 registers for now
-    if (regindex < 0 || regindex >= BSMT2000_REG_TOTAL)
-        return;
-    voice->reg[regindex] = data;
-    // Reset fraction for position register
-    if (regindex == BSMT2000_REG_CURRPOS)
-        voice->fraction = 0;
-    // TODO: handle ROM banking quirks, special flags, etc.
+        voice_index = address - regmap[mode][regindex];
+        if (voice_index >= chip->voices) return;
+        voice = &chip->voice[voice_index];
+        if (regindex < 0 || regindex >= BSMT2000_REG_TOTAL) return;
+
+        // Apply DE Rom banking fix for REG_BANK
+        if (regindex == BSMT2000_REG_BANK) {
+            UINT16 temp = (data & 0x07) | ((data & 0x18) << 1) | ((data & 0x20) >> 2);
+            data = temp;
+        }
+
+        voice->reg[regindex] = data;
+
+        if (regindex == BSMT2000_REG_RIGHTVOL)
+            chip->right_volume_set = 1;
+
+        if (regindex == BSMT2000_REG_CURRPOS)
+            voice->fraction = 0;
+    } 
+    // Handle ADPCM voice registers (address >= 0x6d)
+    else {
+        voice = &chip->voice[BSMT2000_ADPCM_INDEX];
+        switch (address) {
+            case 0x6d: // REG_LOOPEND
+                voice->reg[BSMT2000_REG_LOOPEND] = data;
+                break;
+            case 0x6e: // Main right volume
+                voice->reg[BSMT2000_REG_RIGHTVOL] = data;
+                chip->right_volume_set = 1;
+                break;
+            case 0x6f: // REG_BANK (ADPCM)
+                data = (data & 0x07) | ((data & 0x18) << 1) | ((data & 0x20) >> 2);
+                voice->reg[BSMT2000_REG_BANK] = data;
+                break;
+            case 0x73: // REG_RATE (ADPCM)
+                voice->reg[BSMT2000_REG_RATE] = data;
+                if (data != 0) {
+                    chip->adpcm_current = 0;
+                    chip->adpcm_delta_n = 10;
+                }
+                break;
+            case 0x74: // Alternate right volume
+                voice->reg[BSMT2000_REG_RIGHTVOL] = data;
+                chip->right_volume_set = 1;
+                break;
+            case 0x75: // REG_CURRPOS (ADPCM)
+                voice->reg[BSMT2000_REG_CURRPOS] = data;
+                voice->fraction = 0;
+                break;
+            case 0x77: // ADPCM command 0x77
+                chip->adpcm_77 = data;
+                break;
+            case 0x70: // Main left volume
+            case 0x78: // Alternate left volume
+                if (chip->stereo)
+                    voice->reg[BSMT2000_REG_LEFTVOL] = data;
+                break;
+            default:
+                break;
+        }
+    }
 }
 
 /* ==== Sample ROM Handling ==== */
@@ -408,8 +458,14 @@ static void bsmt2000_update(void *param, UINT32 samples, DEV_SMPL **outputs)
             continue;
         INT8 *base = chip->sample_rom + voice->reg[BSMT2000_REG_BANK] * BSMT2000_ROM_BANKSIZE;
         UINT32 rate = voice->reg[BSMT2000_REG_RATE];
-        INT32 rvol = voice->reg[BSMT2000_REG_RIGHTVOL];
-        INT32 lvol = chip->stereo ? voice->reg[BSMT2000_REG_LEFTVOL] : rvol;
+		INT32 rvol = voice->reg[BSMT2000_REG_RIGHTVOL];
+		INT32 lvol = chip->stereo ? voice->reg[BSMT2000_REG_LEFTVOL] : rvol;
+		if (chip->stereo && !chip->right_volume_set) {
+			rvol = lvol;
+		}
+		if (chip->adpcm_77 > 0 && rvol == 0 && lvol == 0) {
+			rvol = lvol = chip->adpcm_77;
+		}
         UINT32 pos = voice->reg[BSMT2000_REG_CURRPOS];
         UINT32 frac = voice->fraction;
         for (samp = 0; samp < length; samp++)
@@ -439,8 +495,14 @@ static void bsmt2000_update(void *param, UINT32 samples, DEV_SMPL **outputs)
         if (voice->reg[BSMT2000_REG_BANK] < chip->total_banks && voice->reg[BSMT2000_REG_RATE])
         {
             INT8 *base = chip->sample_rom + voice->reg[BSMT2000_REG_BANK] * BSMT2000_ROM_BANKSIZE;
-            INT32 rvol = voice->reg[BSMT2000_REG_RIGHTVOL];
-            INT32 lvol = chip->stereo ? voice->reg[BSMT2000_REG_LEFTVOL] : rvol;
+			INT32 rvol = voice->reg[BSMT2000_REG_RIGHTVOL];
+			INT32 lvol = chip->stereo ? voice->reg[BSMT2000_REG_LEFTVOL] : rvol;
+			if (chip->stereo && !chip->right_volume_set) {
+				rvol = lvol;
+			}
+			if (chip->adpcm_77 > 0 && rvol == 0 && lvol == 0) {
+				rvol = lvol = chip->adpcm_77;
+			}
             UINT32 pos = voice->reg[BSMT2000_REG_CURRPOS];
             UINT32 frac = voice->fraction;
             for (samp = 0; samp < length && pos < voice->reg[BSMT2000_REG_LOOPEND]; samp++)
