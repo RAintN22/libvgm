@@ -85,6 +85,7 @@ option(SNDEMU_MSM5205_ALL "Sound Device MSM5205: all cores" OFF)
 option(SNDEMU_K005289_ALL "Sound Device K005289: all cores" OFF)
 option(SNDEMU_ICS2115_ALL "Sound Device ICS2115: all cores" OFF)
 option(SNDEMU_MSM5232_ALL "Sound Device MSM5232: all cores" OFF)
+option(SNDEMU_BSMT2000_ALL "Sound Device BSMT2000: all cores" OFF)
 
 # console/computer presets
 option(SNDEMU__PRESET_SMS "Sound Dev. Preset: Sega Master System/Game Gear" OFF)
@@ -149,6 +150,7 @@ if(SNDEMU__ALL)
 	set(SNDEMU_K005289_ALL ON)
 	set(SNDEMU_ICS2115_ALL ON)
 	set(SNDEMU_MSM5232_ALL ON)
+	set(SNDEMU_BSMT2000_ALL ON)
 endif()
 
 
@@ -636,10 +638,15 @@ if(SNDEMU_ICS2115_ALL)
 	set(EMU_FILES ${EMU_FILES} cores/ics2115.c)
 	set(EMU_CORE_HEADERS ${EMU_CORE_HEADERS} cores/ics2115.h)
 endif()
-if(SNDEMU_ICS2115_ALL)
+if(SNDEMU_MSM5232_ALL)
 	set(EMU_DEFS ${EMU_DEFS} " SNDDEV_MSM5232")
 	set(EMU_FILES ${EMU_FILES} cores/msm5232.c)
 	set(EMU_CORE_HEADERS ${EMU_CORE_HEADERS} cores/msm5232.h)
+endif()
+if(SNDEMU_BSMT2000_ALL)
+	set(EMU_DEFS ${EMU_DEFS} " SNDDEV_BSMT2000")
+	set(EMU_FILES ${EMU_FILES} cores/bsmt2000.c)
+	set(EMU_CORE_HEADERS ${EMU_CORE_HEADERS} cores/bsmt2000.h)
 endif()
 
 

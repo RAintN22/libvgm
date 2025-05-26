@@ -185,6 +185,7 @@ INLINE void daccontrol_SendCommand(dac_control* chip)
 	case DEVID_ES5503:
 	case DEVID_GA20:	// TODO: Verify
 	case DEVID_MIKEY:
+	case DEVID_ICS2115:	// TODO: Verify
 		if (chip->Write.A8D8 == NULL)
 			return;
 		Command = (chip->DstCommand & 0x00FF) >> 0;
@@ -260,6 +261,7 @@ INLINE void daccontrol_SendCommand(dac_control* chip)
 		}
 		break;
 	case DEVID_QSOUND:	// 8-bit Register, 16-bit Data
+	case DEVID_BSMT2000:
 		if (chip->Write.A8D8 == NULL)
 			return;
 		Command = (chip->DstCommand & 0x00FF) >> 0;
@@ -436,15 +438,16 @@ void daccontrol_setup_chip(void* info, DEV_INFO* devInf, UINT8 ChType, UINT16 Co
 		break;
 	case DEVID_32X_PWM:
 	case DEVID_QSOUND:
+	case DEVID_BSMT2000:
 		chip->CmdSize = 0x02;
 		break;
 	case DEVID_MSM5205:
-		chip->CmdSize = 0x02;
-		chip->CmdSize = 0x01; // eito hack
+		chip->CmdSize = 0x03;
+		chip->CmdSize = 0x02; // eito hack
 		break;
-    case DEVID_K005289:
-        chip->CmdSize = 0x01;
-        break;
+	case DEVID_K005289:
+		chip->CmdSize = 0x01;
+		break;
 	default:
 		chip->CmdSize = 0x01;
 		break;

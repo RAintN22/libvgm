@@ -48,5 +48,6 @@
 #define DEVID_K005289	0x2C
 #define DEVID_ICS2115	0x2D
 #define DEVID_MSM5232   0x2E
+#define DEVID_BSMT2000  0x2F
 
 #endif	// __SOUNDDEVS_H__
