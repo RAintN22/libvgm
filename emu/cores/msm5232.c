@@ -73,29 +73,32 @@ typedef struct {
 } MSM5232_STATE;
 
 // Forward declarations
-static UINT8 device_start(const DEV_GEN_CFG* cfg, DEV_INFO* retDevInf);
-static void device_stop(void* info);
-static void device_reset(void* info);
-static void device_update(void* info, UINT32 samples, DEV_SMPL** outputs);
-static void write_reg(void* info, UINT8 reg, UINT8 value);
-static void set_mute_mask(void* info, UINT32 muteMask);
+static UINT8 device_start_msm5232(const MSM5232_CFG* cfg, DEV_INFO* retDevInf);
+static void device_stop_msm5232(void* info);
+static void device_reset_msm5232(void* info);
+static void device_update_msm5232(void* info, UINT32 samples, DEV_SMPL** outputs);
+static void msm5232_write(void* info, UINT8 reg, UINT8 value);
+static void msm5232_set_mute_mask(void* info, UINT32 muteMask);
 
 static DEVDEF_RWFUNC devFunc[] = {
-    {RWF_REGISTER | RWF_WRITE, DEVRW_A8D8, 0, write_reg},
-    {RWF_CHN_MUTE | RWF_WRITE, DEVRW_ALL, 0, set_mute_mask},
+    {RWF_REGISTER | RWF_WRITE, DEVRW_A8D8, 0, msm5232_write},
+    {RWF_CHN_MUTE | RWF_WRITE, DEVRW_ALL, 0, msm5232_set_mute_mask},
     {0x00, 0x00, 0, NULL}
 };
 
 static DEV_DEF devDef = {
     "MSM5232", "MAME", FCC_MAME,
-    device_start, device_stop, device_reset, device_update,
-    NULL, set_mute_mask, NULL, NULL, NULL, NULL, devFunc
+    (DEVFUNC_START)device_start_msm5232,
+	device_stop_msm5232,
+	device_reset_msm5232,
+	device_update_msm5232,
+    NULL, msm5232_set_mute_mask, NULL, NULL, NULL, NULL, devFunc
 };
 static const char* DeviceName(const DEV_GEN_CFG* devCfg)
 {
 	return "MSM5232";
 }
-static UINT16 DeviceChannels(const DEV_GEN_CFG* devCfg) { return 8; }
+static UINT16 DeviceChannels(const DEV_GEN_CFG* devCfg) { return MSM5232_NUM_CHANNELS; }
 static const char** DeviceChannelNames(const DEV_GEN_CFG* devCfg) { return NULL; }
 
 const DEV_DECL sndDev_MSM5232 =
@@ -153,18 +156,19 @@ static void init_voice(MSM5232_STATE* chip, int i)
 
 // --- Core Functions ---
 
-static UINT8 device_start(const DEV_GEN_CFG* cfg, DEV_INFO* retDevInf)
+static UINT8 device_start_msm5232(const MSM5232_CFG* cfg, DEV_INFO* retDevInf)
 {
     MSM5232_STATE* chip;
-    const MSM5232_CFG* msm_cfg = (const MSM5232_CFG*)cfg;
 
     chip = (MSM5232_STATE*)calloc(1, sizeof(MSM5232_STATE));
     if (!chip) return 0xFF;
 
-    chip->clock = msm_cfg->_genCfg.clock;
-    memcpy(chip->capacitors, msm_cfg->capacitors, sizeof(double)*8);
+    chip->clock = cfg->_genCfg.clock;
+	for (int i = 0; i < 8; i++)
+		chip->capacitors[i] = cfg->capacitors[i];
+
     chip->sample_rate = chip->clock / CLOCK_RATE_DIVIDER;
-    SRATE_CUSTOM_HIGHEST(cfg->srMode, chip->sample_rate, cfg->smplRate);
+    SRATE_CUSTOM_HIGHEST(cfg->_genCfg.srMode, chip->sample_rate, cfg->_genCfg.smplRate);
 
     init_tables(chip);
     for (int i = 0; i < MSM5232_NUM_CHANNELS; i++)
@@ -183,15 +187,15 @@ static UINT8 device_start(const DEV_GEN_CFG* cfg, DEV_INFO* retDevInf)
     return 0x00;
 }
 
-static void device_stop(void* info) { free(info); }
+static void device_stop_msm5232(void* info) { free(info); }
 
-static void device_reset(void* info)
+static void device_reset_msm5232(void* info)
 {
     MSM5232_STATE* chip = (MSM5232_STATE*)info;
     for (int i = 0; i < MSM5232_NUM_CHANNELS; i++) {
         init_voice(chip, i);
-        write_reg(chip, i, 0x80);
-        write_reg(chip, i, 0x00);
+        msm5232_write(chip, i, 0x80);
+        msm5232_write(chip, i, 0x00);
     }
     chip->noise_cnt = 0;
     chip->noise_rng = 1;
@@ -344,7 +348,7 @@ static void update_noise(MSM5232_STATE* chip)
 }
 
 // --- Main Update ---
-static void device_update(void* info, UINT32 samples, DEV_SMPL** outputs)
+static void device_update_msm5232(void* info, UINT32 samples, DEV_SMPL** outputs)
 {
 	MSM5232_STATE* chip = (MSM5232_STATE*)info;
 	DEV_SMPL* outL = outputs[0];
@@ -377,7 +381,7 @@ static void device_update(void* info, UINT32 samples, DEV_SMPL** outputs)
 }
 
 // --- Register Write Handler ---
-static void write_reg(void* info, UINT8 reg, UINT8 value)
+static void msm5232_write(void* info, UINT8 reg, UINT8 value)
 {
     MSM5232_STATE* chip = (MSM5232_STATE*)info;
     if (reg < 0x08) {
@@ -460,7 +464,7 @@ static void write_reg(void* info, UINT8 reg, UINT8 value)
 	}
 }
 
-static void set_mute_mask(void* info, UINT32 muteMask)
+static void msm5232_set_mute_mask(void* info, UINT32 muteMask)
 {
 	MSM5232_STATE* chip = (MSM5232_STATE*)info;
 	for (int i = 0; i < MSM5232_NUM_CHANNELS; i++)
