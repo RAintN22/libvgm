@@ -129,6 +129,7 @@ INLINE double ReadLE64d(const UINT8* data)
 #endif
 }
 
+
 INLINE UINT32 ReadRelOfs(const UINT8* data, UINT32 fileOfs)
 {
 	// read a VGM-style (relative) offset
@@ -1327,14 +1328,15 @@ void VGMPlayer::GenerateDeviceConfig(void)
                     MSM5232_CFG okiCfg;
 
                     okiCfg._genCfg = devCfg;
-                    okiCfg.capacitors[0] = (double)(8);
-                    okiCfg.capacitors[1] = (double)(8);
-					okiCfg.capacitors[2] = (double)(8);
-					okiCfg.capacitors[3] = (double)(8);
-					okiCfg.capacitors[4] = (double)(8);
-					okiCfg.capacitors[5] = (double)(8);
-					okiCfg.capacitors[6] = (double)(8);
-                    okiCfg.capacitors[7] = (double)(8);
+					// default value for now
+                    okiCfg.capacitors[0] = (double)(1e-6);
+                    okiCfg.capacitors[1] = (double)(1e-6);
+					okiCfg.capacitors[2] = (double)(1e-6);
+					okiCfg.capacitors[3] = (double)(1e-6);
+					okiCfg.capacitors[4] = (double)(1e-6);
+					okiCfg.capacitors[5] = (double)(1e-6);
+					okiCfg.capacitors[6] = (double)(1e-6);
+                    okiCfg.capacitors[7] = (double)(1e-6);
                     SaveDeviceConfig(sdCfg.cfgData, &okiCfg, sizeof(MSM5232_CFG));
                 }
                 break;
