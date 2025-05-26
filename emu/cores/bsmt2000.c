@@ -322,10 +322,11 @@ static void bsmt2000_write_data(void *info, UINT8 address, UINT16 data) {
         if (regindex < 0 || regindex >= BSMT2000_REG_TOTAL) return;
 
         // Apply DE Rom banking fix for REG_BANK
-        if (regindex == BSMT2000_REG_BANK) {
-            UINT16 temp = (data & 0x07) | ((data & 0x18) << 1) | ((data & 0x20) >> 2);
-            data = temp;
-        }
+		if (regindex == BSMT2000_REG_BANK) {
+			// DE banking remapping: rearrange bits for correct ROM access
+			data = (data & 0x07) | ((data & 0x18) << 1) | ((data & 0x20) >> 2);
+			voice->reg[regindex] = data;
+		}
 
         voice->reg[regindex] = data;
 
@@ -350,13 +351,13 @@ static void bsmt2000_write_data(void *info, UINT8 address, UINT16 data) {
                 data = (data & 0x07) | ((data & 0x18) << 1) | ((data & 0x20) >> 2);
                 voice->reg[BSMT2000_REG_BANK] = data;
                 break;
-            case 0x73: // REG_RATE (ADPCM)
-                voice->reg[BSMT2000_REG_RATE] = data;
-                if (data != 0) {
-                    chip->adpcm_current = 0;
-                    chip->adpcm_delta_n = 10;
-                }
-                break;
+			case 0x73: // REG_RATE (ADPCM)
+				voice->reg[BSMT2000_REG_RATE] = data;
+				if (data != 0) {
+					chip->adpcm_current = 0;
+					chip->adpcm_delta_n = 10; // Reset delta to initial value
+				}
+				break;
             case 0x74: // Alternate right volume
                 voice->reg[BSMT2000_REG_RIGHTVOL] = data;
                 chip->right_volume_set = 1;
@@ -380,9 +381,11 @@ static void bsmt2000_write_data(void *info, UINT8 address, UINT16 data) {
 }
 
 /* ==== Sample ROM Handling ==== */
-static void bsmt2000_alloc_rom(void* info, UINT32 memsize)
-{
+static void bsmt2000_alloc_rom(void* info, UINT32 memsize) {
     bsmt2000_state* chip = (bsmt2000_state *)info;
+    // Ensure memsize is rounded up to the nearest bank size
+    memsize = (memsize + BSMT2000_ROM_BANKSIZE - 1) & ~(BSMT2000_ROM_BANKSIZE - 1);
+    chip->total_banks = memsize / BSMT2000_ROM_BANKSIZE;
     if (chip->sample_rom_length == memsize)
         return;
     chip->sample_rom = (INT8*)realloc(chip->sample_rom, memsize);
@@ -392,14 +395,14 @@ static void bsmt2000_alloc_rom(void* info, UINT32 memsize)
     memset(chip->sample_rom, 0xFF, memsize);
 }
 
-static void bsmt2000_write_rom(void *info, UINT32 offset, UINT32 length, const UINT8* data)
-{
+static void bsmt2000_write_rom(void *info, UINT32 offset, UINT32 length, const UINT8* data) {
     bsmt2000_state* chip = (bsmt2000_state *)info;
-    if (offset > chip->sample_rom_length)
-        return;
+    if (offset > chip->sample_rom_length) return;
     if (offset + length > chip->sample_rom_length)
         length = chip->sample_rom_length - offset;
-    memcpy(chip->sample_rom + offset, data, length);
+    // Convert unsigned to signed by subtracting 0x80
+    for (UINT32 i = 0; i < length; i++)
+        chip->sample_rom[offset + i] = (INT8)(data[i] - 0x80);
 }
 
 /* ==== Mute Mask ==== */
@@ -461,7 +464,7 @@ static void bsmt2000_update(void *param, UINT32 samples, DEV_SMPL **outputs)
 		INT32 rvol = voice->reg[BSMT2000_REG_RIGHTVOL];
 		INT32 lvol = chip->stereo ? voice->reg[BSMT2000_REG_LEFTVOL] : rvol;
 		if (chip->stereo && !chip->right_volume_set) {
-			rvol = lvol;
+			rvol = lvol; // Use left volume for right channel if not set
 		}
 		if (chip->adpcm_77 > 0 && rvol == 0 && lvol == 0) {
 			rvol = lvol = chip->adpcm_77;
@@ -498,7 +501,7 @@ static void bsmt2000_update(void *param, UINT32 samples, DEV_SMPL **outputs)
 			INT32 rvol = voice->reg[BSMT2000_REG_RIGHTVOL];
 			INT32 lvol = chip->stereo ? voice->reg[BSMT2000_REG_LEFTVOL] : rvol;
 			if (chip->stereo && !chip->right_volume_set) {
-				rvol = lvol;
+				rvol = lvol; // Use left volume for right channel if not set
 			}
 			if (chip->adpcm_77 > 0 && rvol == 0 && lvol == 0) {
 				rvol = lvol = chip->adpcm_77;
@@ -549,15 +552,13 @@ static void bsmt2000_update(void *param, UINT32 samples, DEV_SMPL **outputs)
         }
     }
     // Output clamp and write
-    for (samp = 0; samp < length; samp++)
-    {
-        INT64 l = (left[samp] >> 16);
-        INT64 r = (right[samp] >> 16);
-        if (l > 32767) l = 32767;
-        else if (l < -32768) l = -32768;
-        if (r > 32767) r = 32767;
-        else if (r < -32768) r = -32768;
-        ldest[samp] = (INT16)l;
-        rdest[samp] = (INT16)r;
-    }
+	for (samp = 0; samp < length; samp++) {
+		// Scale down by 16 bits and clamp to 16-bit range
+		INT64 l = (left[samp] >> 16);
+		INT64 r = (right[samp] >> 16);
+		l = (l > 32767) ? 32767 : (l < -32768) ? -32768 : l;
+		r = (r > 32767) ? 32767 : (r < -32768) ? -32768 : r;
+		outputs[0][samp] = (INT16)l;
+		outputs[1][samp] = (INT16)r;
+	}
 }
