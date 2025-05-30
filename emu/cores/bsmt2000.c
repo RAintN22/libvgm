@@ -41,20 +41,28 @@
 #define BSMT2000_CHANNELS     12          /* up to 12 PCM voices, plus ADPCM */
 #define BSMT2000_ADPCM_INDEX  12          /* 0..11 = PCM, 12 = ADPCM/compressed */
 #define BSMT2000_REG_CURRPOS  0
-#define BSMT2000_REG_UNKNOWN1 1
-#define BSMT2000_REG_RATE     2
-#define BSMT2000_REG_LOOPEND  3
-#define BSMT2000_REG_LOOPSTART 4
-#define BSMT2000_REG_BANK     5
-#define BSMT2000_REG_RIGHTVOL 6
-#define BSMT2000_REG_LEFTVOL  7
-#define BSMT2000_REG_ALT_RIGHTVOL 8
-#define BSMT2000_REG_TOTAL    9
+#define BSMT2000_REG_RATE 1
+#define BSMT2000_REG_LOOPEND     2
+#define BSMT2000_REG_LOOPSTART  3
+#define BSMT2000_REG_BANK 4
+#define BSMT2000_REG_RIGHTVOL     5
+#define BSMT2000_REG_LEFTVOL 6
+#define BSMT2000_REG_TOTAL    7
 
 #define BSMT2000_MAX_VOICES   (BSMT2000_CHANNELS + 1)  /* 12 PCM + 1 ADPCM/compressed */
 #define BSMT2000_SAMPLE_CHUNK 10000
 
 #define BSMT2000_ROM_BANKSIZE 0x10000     /* 64k per bank */
+
+static const UINT8 regmap[8][7] = {
+    { 0x00, 0x18, 0x24, 0x30, 0x3c, 0x48, 0xff }, // last one (stereo/leftvol) unused, set to max for mapping
+    { 0x00, 0x16, 0x21, 0x2c, 0x37, 0x42, 0x4d },
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // mode 2 only a testmode left channel
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // mode 3 only a testmode right channel
+    { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // mode 4 only a testmode left channel
+    { 0x00, 0x18, 0x24, 0x30, 0x3c, 0x54, 0x60 },
+    { 0x00, 0x10, 0x18, 0x20, 0x28, 0x38, 0x40 },
+    { 0x00, 0x12, 0x1b, 0x24, 0x2d, 0x3f, 0x48 } };
 
 /* ==== Internal Voice State ==== */
 typedef struct
@@ -87,6 +95,7 @@ struct _bsmt2000_state
     UINT8 adpcm;          // ADPCM/compressed enabled?
     UINT8 mode;           // current mode (0,1,5,6,7)
     UINT8 last_register;  // last register written
+    UINT32 clock;         // Chip clock
 
     // ADPCM/compressed state
     INT32 adpcm_current;
@@ -100,6 +109,8 @@ struct _bsmt2000_state
 
     // Misc
     // (can add more fields as needed)
+	DEVCB_SRATE_CHG SmpRateFunc;
+	void* SmpRateData;
 };
 
 /* ==== Prototypes ==== */
@@ -117,6 +128,7 @@ static void bsmt2000_write_rom(void *info, UINT32 offset, UINT32 length, const U
 static void bsmt2000_set_mute_mask(void *info, UINT32 MuteMask);
 static UINT32 bsmt2000_get_mute_mask(void *info);
 static void bsmt2000_set_log_cb(void* info, DEVCB_LOG func, void* param);
+static void bsmt2000_set_srchg_cb(void *info, DEVCB_SRATE_CHG CallbackFunc, void* DataPtr);
 
 /* ==== Device Function Table ==== */
 static DEVDEF_RWFUNC devFunc[] =
@@ -143,7 +155,7 @@ DEV_DEF devDef =
     NULL, // SetOptionBits
     bsmt2000_set_mute_mask,
     NULL, // SetPanning
-    NULL, // SetSampleRateChangeCallback
+    bsmt2000_set_srchg_cb,
     bsmt2000_set_log_cb, // SetLoggingCallback
     NULL, // LinkDevice
 
@@ -224,7 +236,8 @@ static UINT8 device_start_bsmt2000(const DEV_GEN_CFG* cfg, DEV_INFO* retDevInf)
     chip->adpcm = 1;         // default: ADPCM enabled
 
     chip->mode = 1;
-    chip->sample_rate = cfg->clock / 1000.0;
+    chip->clock = cfg->clock;
+    chip->sample_rate = chip->clock / 1000.0;
     chip->last_register = 1; // Mode 1
 
     chip->adpcm_current = 0;
@@ -256,8 +269,56 @@ static void device_reset_bsmt2000(void *info) {
     init_all_voices(chip);
     chip->adpcm_current = 0;
     chip->adpcm_delta_n = 10;
-    chip->mode = chip->last_register;
+    switch (chip->last_register)
+    {
+        default:
+            break;
+        /* mode 0: 24kHz, 12 channel PCM, 1 channel ADPCM, mono; from PinMAME */
+        case 0:
+            chip->sample_rate = chip->clock / 1000.;
+            chip->stereo = 0;
+            chip->voices = 12;
+            chip->adpcm = 1;
+            chip->mode = 0;
+            break;
+        /* mode 1: 24kHz, 11 channel PCM, 1 channel ADPCM, stereo */
+        case 1:
+            chip->sample_rate = chip->clock / 1000.;
+            chip->stereo = 1;
+            chip->voices = 11;
+            chip->adpcm = 1;
+            chip->mode = 1;
+            break;
+        /* mode 5: 24kHz, 12 channel PCM, stereo */
+        case 5:
+            chip->sample_rate = chip->clock / 1000.;
+            chip->stereo = 1;
+            chip->voices = 12;
+            chip->adpcm = 0;
+            chip->mode = 5;
+            break;
+        /* mode 6: 34kHz, 8 channel PCM, stereo */
+        case 6:
+            chip->sample_rate = chip->clock / 706.;
+            chip->stereo = 1;
+            chip->voices = 8;
+            chip->adpcm = 0;
+            chip->mode = 6;
+            break;
+
+        /* mode 7: 32kHz, 9 channel PCM, stereo */
+        case 7:
+            chip->sample_rate = chip->clock / 750.;
+            chip->stereo = 1;
+            chip->voices = 9;
+            chip->adpcm = 0;
+            chip->mode = 7;
+            break;
+    }
     bsmt2000_set_mute_mask(chip, muteMask);
+	if (chip->SmpRateFunc != NULL)
+		chip->SmpRateFunc(chip->SmpRateData, chip->sample_rate);
+	
 }
 /* ==== Register/Command Interface ==== */
 
@@ -276,6 +337,10 @@ static void bsmt2000_w(void *info, UINT8 offset, UINT8 data)
     case 2:
         bsmt2000_write_data(chip, data, latch);
         break;
+    case 3:
+        chip->last_register = data;
+        device_reset_bsmt2000(info);
+        break;
     default:
         emu_logf(&chip->logger, DEVLOG_DEBUG, "unexpected bsmt2000 write to offset %d == %02X\n", offset, data);
         break;
@@ -290,59 +355,63 @@ static UINT8 bsmt2000_r(void *info, UINT8 offset)
 
 static void bsmt2000_write_data(void *info, UINT8 address, UINT16 data) {
     bsmt2000_state *chip = (bsmt2000_state *)info;
-    int regindex, voice_index;
     bsmt2000_voice *voice;
 
     chip->last_register = address;
 
     // Standard voices (interleaved register layout)
     if (address < 0x6d) {
-        regindex = address / chip->voices;
-        voice_index = address % chip->voices;
-        if (voice_index >= chip->voices || regindex > 8) return;
+        int voice_index;
+        int regindex = 6;
+        while (address < regmap[chip->mode][regindex])
+            --regindex;
+
+        voice_index = address - regmap[chip->mode][regindex];
+        if (voice_index >= chip->voices)
+            return;
+
         voice = &chip->voice[voice_index];
         voice->reg[regindex] = data;
 
         switch (regindex) {
-            case 0: // REG_CURRPOS
+            case BSMT2000_REG_CURRPOS: // REG_CURRPOS
                 voice->position = data << 16;
                 break;
-            case 2: // REG_RATE
+            case BSMT2000_REG_RATE: // REG_RATE
                 voice->adjusted_rate = data << 5;
                 break;
-            case 4: // REG_LOOPSTART
+            case BSMT2000_REG_LOOPSTART: // REG_LOOPSTART
                 voice->loop_start_position = data << 16;
                 break;
-            case 3: // REG_LOOPEND
+            case BSMT2000_REG_LOOPEND: // REG_LOOPEND
                 voice->loop_stop_position = data << 16;
-                break;
-            case 8: // REG_ALT_RIGHTVOL
-                voice->reg[6] = data; // REG_RIGHTVOL = reg[6]
                 break;
         }
     }
     // Compressed/ADPCM channel (11-voice model only)
-    else if (chip->voices == 11 && address >= 0x6d) {
+    else if (chip->adpcm != 0 && address >= 0x6d) {
         voice = &chip->voice[BSMT2000_ADPCM_INDEX];
         switch (address) {
         case 0x6d:
-            voice->reg[3] = data; // REG_LOOPEND
+            voice->reg[BSMT2000_REG_LOOPEND] = data; // REG_LOOPEND
             voice->loop_stop_position = data << 16;
             break;
         case 0x6f:
-            voice->reg[5] = data; // REG_BANK
+            voice->reg[BSMT2000_REG_BANK] = data; // REG_BANK
             break;
+        case 0x6e: // main right channel volume control, used when ADPCM is alreay playing
         case 0x74:
-            voice->reg[6] = data; // REG_RIGHTVOL
+            voice->reg[BSMT2000_REG_RIGHTVOL] = data; // REG_RIGHTVOL
             break;
         case 0x75:
-            voice->reg[0] = data; // REG_CURRPOS
+            voice->reg[BSMT2000_REG_CURRPOS] = data; // REG_CURRPOS
             voice->position = data << 16;
             chip->adpcm_current = 0;
             chip->adpcm_delta_n = 10;
             break;
+        case 0x70: // main left channel volume control, used when ADPCM is alreay playing
         case 0x78:
-            voice->reg[7] = data; // REG_LEFTVOL
+            voice->reg[BSMT2000_REG_LEFTVOL] = data; // REG_LEFTVOL
             break;
         }
     }
@@ -423,13 +492,13 @@ static void bsmt2000_update(void *param, UINT32 samples, DEV_SMPL **outputs)
         if (chip->Muted[v])
             continue;
         voice = &chip->voice[v];
-        if (voice->reg[5] >= chip->total_banks) // REG_BANK
+        if (voice->reg[BSMT2000_REG_BANK] >= chip->total_banks) // REG_BANK
             continue;
-        UINT8 *base = chip->sample_rom + voice->reg[5] * BSMT2000_ROM_BANKSIZE;
+        UINT8 *base = chip->sample_rom + voice->reg[BSMT2000_REG_BANK] * BSMT2000_ROM_BANKSIZE;
         UINT32 rate = voice->adjusted_rate;
         UINT32 pos = voice->position;
-        INT32 lvol = voice->reg[7]; // REG_LEFTVOL
-        INT32 rvol = voice->reg[6]; // REG_RIGHTVOL
+        INT32 lvol = voice->reg[BSMT2000_REG_LEFTVOL]; // REG_LEFTVOL
+        INT32 rvol = chip->stereo ? voice->reg[BSMT2000_REG_RIGHTVOL] : lvol; // REG_RIGHTVOL
         int remaining = length;
 
         while (remaining--) {
@@ -447,16 +516,16 @@ static void bsmt2000_update(void *param, UINT32 samples, DEV_SMPL **outputs)
     }
 
     // ADPCM/compressed voice (11-voice model only)
-    if (chip->voices == 11 && !chip->Muted[BSMT2000_ADPCM_INDEX])
+    if (chip->adpcm != 0 && !chip->Muted[BSMT2000_ADPCM_INDEX])
     {
         voice = &chip->voice[BSMT2000_ADPCM_INDEX];
-        if (voice->reg[5] < chip->total_banks)
+        if (voice->reg[BSMT2000_REG_BANK] < chip->total_banks)
         {
-            UINT8 *base = chip->sample_rom + voice->reg[5] * BSMT2000_ROM_BANKSIZE;
+            UINT8 *base = chip->sample_rom + voice->reg[BSMT2000_REG_BANK] * BSMT2000_ROM_BANKSIZE;
             UINT32 rate = 0x02aa << 4;
             UINT32 pos = voice->position;
-            INT32 lvol = voice->reg[7];
-            INT32 rvol = voice->reg[6];
+            INT32 lvol = voice->reg[BSMT2000_REG_LEFTVOL];
+            INT32 rvol = chip->stereo ? voice->reg[BSMT2000_REG_RIGHTVOL] : lvol;
             int remaining = length;
 
             while (remaining-- && pos < voice->loop_stop_position)
@@ -505,4 +574,15 @@ static void bsmt2000_update(void *param, UINT32 samples, DEV_SMPL **outputs)
         outputs[0][samp] = l;
         outputs[1][samp] = r;
     }
+}
+
+static void bsmt2000_set_srchg_cb(void *info, DEVCB_SRATE_CHG CallbackFunc, void* DataPtr)
+{
+    bsmt2000_state *chip = (bsmt2000_state *)info;
+	
+	// set Sample Rate Change Callback routine
+	chip->SmpRateFunc = CallbackFunc;
+	chip->SmpRateData = DataPtr;
+	
+	return;
 }
